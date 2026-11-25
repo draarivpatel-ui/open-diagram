@@ -44,6 +44,26 @@ def _clean(text: str) -> str:
     return re.sub(r"\s*<br\s*/?>\s*", " ", text).strip()
 
 
+def _split_outside(line: str, marker: str, limit: int = 0) -> List[str]:
+    """Split a line at each `marker` that is not inside double quotes. Mermaid keeps `;` and `%%` inside a quoted
+    label as text, so `a["a;b"] --> b; c` is two statements and the first node reads `a;b`."""
+    parts, start, i = [], 0, 0
+    while i < len(line):
+        if line[i] == '"':
+            end = line.find('"', i + 1)
+            i = len(line) if end < 0 else end + 1      # a quote that is never closed runs to the end of the line
+            continue
+        if line.startswith(marker, i):
+            parts.append(line[start:i])
+            i, start = i + len(marker), i + len(marker)
+            if limit and len(parts) == limit:
+                break
+            continue
+        i += 1
+    parts.append(line[start:])
+    return parts
+
+
 def _node(token: str, line_no: int) -> Tuple[str, Optional[str], Optional[str]]:
     """Parse 'A', 'A[Text]', 'A:::cls' into (id, text or None, class or None)."""
     token = token.strip()
@@ -109,8 +129,8 @@ def parse(source: str) -> _Graph:
             m = _CURVE.search(lines[line_no])
             if m:
                 g.curve = m.group(1)
-        raw = lines[line_no].split("%%", 1)[0].strip()
-        for stmt in (s.strip() for s in raw.split(";")):
+        raw = _split_outside(lines[line_no], "%%", 1)[0].strip()
+        for stmt in (s.strip() for s in _split_outside(raw, ";")):
             if not stmt:
                 continue
             n = line_no + 1

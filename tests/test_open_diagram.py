@@ -14,6 +14,7 @@ from open_diagram import (Diagram, Graph, LayoutError, MermaidError, Panel, Spec
                           from_mermaid, from_spec, text_width, wrap)
 from open_diagram import cli  # noqa: E402
 from open_diagram.fonts import face  # noqa: E402
+from open_diagram.mermaid import parse  # noqa: E402
 from open_diagram.spec import panel_from_spec  # noqa: E402
 
 EXAMPLES = ["quickstart", "systems_map", "how_it_works", "pipeline", "card_payment", "layers", "concept_map",
@@ -279,6 +280,39 @@ class MermaidTests(unittest.TestCase):
         with self.assertRaises(MermaidError) as caught:
             from_mermaid("flowchart LR\n  a[ok] --> ???")
         self.assertIn("line 2", str(caught.exception))
+
+    def test_separators_inside_quotes_are_part_of_the_text(self):
+        # Mermaid keeps ; and %% inside a quoted label. Splitting the line on them first cut the statement in two,
+        # so a line Mermaid reads was reported as unreadable.
+        for text, text_of, label in (('flowchart LR\n  a["a;b"] --> b\n', "a;b", None),
+                                     ('flowchart LR\n  a["100%% sure"] --> b\n', "100%% sure", None),
+                                     ('flowchart LR\n  a -->|"x; y"| b\n', "a", "x; y"),
+                                     ('flowchart LR\n  a -- "x; y" --> b\n', "a", "x; y"),
+                                     ('flowchart LR\n  a["x] y"] --> b\n', "x] y", None)):
+            with self.subTest(text=text):
+                g = parse(text)
+                self.assertEqual(g.order, ["a", "b"])
+                self.assertEqual(g.text, {"a": text_of, "b": "b"})
+                self.assertEqual([(e[0], e[1], e[2], e[3]) for e in g.edges], [("a", "b", "flow", label)])
+
+    def test_separators_after_a_quoted_label_still_split_statements_and_comments(self):
+        g = parse('flowchart LR\n  a["a;b"] --> b; b --> c %% not read; x --> y\n  c -->|"x; y"| d\n')
+        self.assertEqual(g.order, ["a", "b", "c", "d"])
+        self.assertEqual(g.text, {"a": "a;b", "b": "b", "c": "c", "d": "d"})
+        self.assertEqual([(e[0], e[1], e[3]) for e in g.edges], [("a", "b", None), ("b", "c", None), ("c", "d", "x; y")])
+
+    def test_subgraph_title_with_a_separator_in_quotes(self):
+        g = parse('flowchart LR\n  subgraph s["a;b"]\n    x --> y\n  end\n  y --> z\n')
+        self.assertEqual([g.groups[0][0], g.group_of], ["a;b", {"x": 0, "y": 0}])
+        self.assertEqual([(e[0], e[1]) for e in g.edges], [("x", "y"), ("y", "z")])
+
+    def test_separators_outside_quotes_are_unchanged(self):
+        for text in ('flowchart LR\n  a --> b; c --> d\n', 'flowchart LR\n  a --- b; c --x d\n',
+                     'flowchart LR\n  a ==> b; c <--> d\n'):
+            with self.subTest(text=text):
+                g = parse(text)
+                self.assertEqual(g.order, ["a", "b", "c", "d"])
+                self.assertEqual([(e[0], e[1]) for e in g.edges], [("a", "b"), ("c", "d")])
 
 
 class GroupTitleTests(unittest.TestCase):
